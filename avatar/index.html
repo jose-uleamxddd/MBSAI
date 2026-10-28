@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+    />
+    <title>Norivy · Asistente de la tienda</title>
+
+    <!-- Import map: three, @pixiv/three-vrm y uqr (QR) desde node_modules locales. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./node_modules/three/build/three.module.js",
+          "three/addons/": "./node_modules/three/examples/jsm/",
+          "@pixiv/three-vrm": "./node_modules/@pixiv/three-vrm/lib/three-vrm.module.js",
+          "@pixiv/three-vrm-animation": "./node_modules/@pixiv/three-vrm-animation/lib/three-vrm-animation.module.js",
+          "uqr": "./node_modules/uqr/dist/index.mjs"
+        }
+      }
+    </script>
+
+    <style>
+      :root {
+        --bg: #0a0d12;
+        --bg-panel: #11161e;
+        --bg-card: #171e29;
+        --line: #263042;
+        --text: #f3f6fb;
+        --text-dim: #9aa7ba;
+        --accent: #ff7a1a; /* naranja taller */
+        --accent-soft: rgba(255, 122, 26, 0.16);
+        --ok: #36d399;
+        --warn: #f5b942;
+        --bad: #ff5468;
+        --radius: 1.1rem;
+        --gap: clamp(0.9rem, 0.5rem + 1.2vw, 1.8rem);
+        --fs-base: clamp(1.05rem, 0.8rem + 0.9vw, 1.7rem);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+        font-size: var(--fs-base);
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+        border: 0;
+        cursor: pointer;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      /* ---- Layout: avatar | contenido (horizontal) · avatar sobre contenido (vertical) ---- */
+      #app {
+        display: grid;
+        height: 100%;
+        grid-template-columns: minmax(0, 36fr) minmax(0, 64fr);
+        grid-template-rows: auto 1fr;
+        grid-template-areas:
+          "top top"
+          "avatar main";
+      }
+
+      @media (orientation: portrait) {
+        #app {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto 38% 1fr;
+          grid-template-areas:
+            "top"
+            "avatar"
+            "main";
+        }
+      }
+
+      #topbar {
+        grid-area: top;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--gap);
+        padding: calc(var(--gap) * 0.7) var(--gap);
+        border-bottom: 1px solid var(--line);
+      }
+      #store-name {
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+      #store-name::before {
+        content: "";
+        display: inline-block;
+        width: 0.7em;
+        height: 0.7em;
+        margin-right: 0.5em;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .top-right {
+        display: flex;
+        align-items: center;
+        gap: var(--gap);
+      }
+      #mic-indicator {
+        display: none;
+        align-items: center;
+        gap: 0.45em;
+        color: var(--ok);
+        font-size: 0.8em;
+      }
+      #mic-indicator::before {
+        content: "";
+        width: 0.6em;
+        height: 0.6em;
+        border-radius: 50%;
+        background: var(--ok);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      body.mic-live[data-session="active"] #mic-indicator {
+        display: flex;
+      }
+      #btn-end {
+        display: none;
+        padding: 0.55em 1.2em;
+        border-radius: 999px;
+        background: var(--bg-card);
+        border: 1px solid var(--line);
+      }
+      body[data-session="active"] #btn-end {
+        display: block;
+      }
+
+      /* ---- Avatar ---- */
+      #avatar-col {
+        grid-area: avatar;
+        position: relative;
+        min-height: 0;
+        background: radial-gradient(ellipse at 50% 35%, #1b2433 0%, var(--bg) 70%);
+      }
+      #avatar-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #chat-feed {
+        position: absolute;
+        left: var(--gap);
+        right: var(--gap);
+        bottom: var(--gap);
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        pointer-events: none;
+      }
+      .chat-bubble {
+        padding: 0.6rem 1rem 0.7rem;
+        border-radius: var(--radius);
+        background: rgba(17, 22, 30, 0.82);
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--line);
+        font-size: 0.82em;
+        line-height: 1.35;
+      }
+      .chat-bubble.assistant {
+        border-color: var(--accent-soft);
+      }
+      .chat-bubble.live {
+        border-color: var(--accent);
+      }
+      .chat-name {
+        font-size: 0.7em;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        margin-bottom: 0.15rem;
+      }
+
+      /* ---- Contenido principal ---- */
+      #main {
+        grid-area: main;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap);
+        padding: var(--gap);
+      }
+      .view {
+        display: none;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      body[data-main="welcome"] #view-welcome,
+      body[data-main="products"] #view-products,
+      body[data-main="applicability"] #view-applicability,
+      body[data-main="quote_ready"] #view-quote {
+        display: flex;
+      }
+
+      #view-welcome {
+        flex-direction: column;
+        justify-content: center;
+        gap: var(--gap);
+      }
+      #view-welcome h1 {
+        margin: 0;
+        font-size: 1.9em;
+        line-height: 1.15;
+      }
+      .tips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.7rem;
+      }
+      .tip {
+        padding: 0.6em 1.1em;
+        border-radius: 999px;
+        background: var(--bg-card);
+        border: 1px solid var(--line);
+        color: var(--text-dim);
+        font-size: 0.8em;
+      }
+
+      /* Tarjetas de productos */
+      #view-products {
+        flex-direction: column;
+      }
+      #products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+        gap: var(--gap);
+        align-content: start;
+        overflow: hidden;
+      }
+      #products-empty {
+        margin: auto;
+        color: var(--text-dim);
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        padding: 1rem 1.1rem;
+        border-radius: var(--radius);
+        background: var(--bg-card);
+        border: 1px solid var(--line);
+      }
+      .card-img {
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+        border-radius: 0.7rem;
+        background: var(--bg-panel);
+      }
+      .card-kind {
+        font-size: 0.65em;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+      }
+      .card-name {
+        margin: 0;
+        font-size: 1em;
+        line-height: 1.25;
+        flex: 1;
+      }
+      .card-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+      }
+      .card-price {
+        font-size: 1.25em;
+        font-weight: 800;
+      }
+      .badge {
+        padding: 0.2em 0.7em;
+        border-radius: 999px;
+        font-size: 0.6em;
+        font-weight: 700;
+        background: var(--bg-panel);
+      }
+      .badge-ok {
+        color: var(--ok);
+      }
+      .badge-low {
+        color: var(--warn);
+      }
+      .badge-out {
+        color: var(--bad);
+      }
+      .badge-unknown {
+        color: var(--text-dim);
+      }
+
+      /* Aplicabilidad */
+      #view-applicability {
+        flex-direction: column;
+        gap: var(--gap);
+      }
+      #applicability-title {
+        margin: 0;
+        font-size: 1.25em;
+      }
+      #applicability-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.6rem;
+        overflow: hidden;
+      }
+      .fit {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.4rem 1.1rem;
+        padding: 0.8rem 1.1rem;
+        border-radius: var(--radius);
+        background: var(--bg-card);
+        border: 1px solid var(--line);
+      }
+      .fit-model {
+        font-weight: 700;
+      }
+      .fit-years {
+        color: var(--accent);
+      }
+      .fit-notes,
+      .fit-none {
+        color: var(--text-dim);
+        font-size: 0.8em;
+      }
+
+      /* Cotización lista + QR */
+      #view-quote {
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: calc(var(--gap) * 2);
+        text-align: left;
+      }
+      #quote-qr {
+        flex: 0 0 auto;
+        width: min(44vmin, 26rem);
+        aspect-ratio: 1;
+        padding: 0.9rem;
+        border-radius: var(--radius);
+        background: #fff;
+      }
+      #quote-qr svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .quote-text h2 {
+        margin: 0 0 0.5rem;
+        font-size: 1.6em;
+      }
+      .quote-text p {
+        margin: 0.3rem 0;
+        color: var(--text-dim);
+      }
+      #quote-total {
+        font-size: 2em;
+        font-weight: 800;
+        color: var(--text);
+      }
+      @media (orientation: portrait) {
+        #view-quote {
+          flex-direction: column;
+          text-align: center;
+        }
+      }
+
+      /* Carrito */
+      #cart {
+        display: none;
+        flex: 0 0 auto;
+        padding: 0.8rem 1.1rem;
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        border: 1px solid var(--accent);
+      }
+      body.has-cart #cart {
+        display: block;
+      }
+      body[data-main="quote_ready"] #cart {
+        display: none;
+      }
+      .cart-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        font-weight: 800;
+        margin-bottom: 0.4rem;
+      }
+      #cart-rows {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 9rem;
+        overflow: hidden;
+        font-size: 0.8em;
+      }
+      .cart-row {
+        display: grid;
+        grid-template-columns: 2.6em 1fr auto;
+        gap: 0.6rem;
+        padding: 0.15rem 0;
+      }
+      .cart-qty {
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      /* Pensando */
+      #thinking {
+        display: none;
+        position: absolute;
+        top: calc(var(--gap) * 0.6);
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 0.4em 1.1em;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent);
+        font-size: 0.75em;
+      }
+      body.is-working #thinking {
+        display: block;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+
+      /* Estado del sistema: solo se ve cuando hay un problema (para el personal). */
+      #status-pill {
+        position: fixed;
+        left: var(--gap);
+        bottom: calc(var(--gap) * 0.5);
+        z-index: 20;
+        padding: 0.3em 0.9em;
+        border-radius: 999px;
+        font-size: 0.6em;
+        background: rgba(0, 0, 0, 0.7);
+        border: 1px solid var(--line);
+        pointer-events: none;
+      }
+      #status-pill[data-state="connected"],
+      #status-pill[data-state="listening"],
+      #status-pill[data-state="speaking"],
+      #status-pill[data-state="working"],
+      #status-pill[data-state="connecting"] {
+        display: none;
+      }
+      #status-pill[data-state="fatal"],
+      #status-pill[data-state="mic_error"],
+      #status-pill[data-state="offline"],
+      #status-pill[data-state="error"] {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+
+      /* ---- Pantalla de atracción (nadie atendido) ---- */
+      #attract {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        padding-bottom: 10vh;
+        gap: 1rem;
+        text-align: center;
+        background: linear-gradient(to top, rgba(10, 13, 18, 0.92) 8%, rgba(10, 13, 18, 0.15) 60%);
+        cursor: pointer;
+      }
+      body[data-session="active"] #attract {
+        display: none;
+      }
+      #attract h1 {
+        margin: 0;
+        font-size: 2.4em;
+      }
+      #attract .cta {
+        padding: 0.7em 1.8em;
+        border-radius: 999px;
+        background: var(--accent);
+        color: #170a00;
+        font-weight: 800;
+        font-size: 1.2em;
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      /* ---- Aviso de inactividad ---- */
+      #idle-warning {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(5, 7, 10, 0.8);
+        backdrop-filter: blur(6px);
+      }
+      body.idle-warning[data-session="active"] #idle-warning {
+        display: flex;
+      }
+      .idle-box {
+        padding: 2rem 2.6rem;
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        border: 1px solid var(--accent);
+        text-align: center;
+      }
+      .idle-box h2 {
+        margin: 0 0 1rem;
+      }
+      #btn-continue {
+        padding: 0.7em 1.8em;
+        border-radius: 999px;
+        background: var(--accent);
+        color: #170a00;
+        font-weight: 800;
+      }
+
+      @keyframes pulse {
+        50% {
+          opacity: 0.45;
+        }
+      }
+    </style>
+  </head>
+  <body data-session="attract" data-main="welcome">
+    <div id="app">
+      <header id="topbar">
+        <div id="store-name"></div>
+        <div class="top-right">
+          <span id="mic-indicator">Escuchando</span>
+          <button id="btn-end" type="button">Terminar</button>
+        </div>
+      </header>
+
+      <section id="avatar-col">
+        <canvas id="avatar-canvas"></canvas>
+        <div id="chat-feed" aria-live="polite"></div>
+      </section>
+
+      <main id="main">
+        <div id="thinking">Consultando el catálogo…</div>
+
+        <section id="view-welcome" class="view">
+          <h1>¿Qué moto o bicicleta busca?</h1>
+          <div class="tips">
+            <span class="tip">«Pastillas de freno para una CB 190R»</span>
+            <span class="tip">«¿Qué bicicletas tienen?»</span>
+            <span class="tip">«Quiero cotizar un kit de arrastre»</span>
+          </div>
+        </section>
+
+        <section id="view-products" class="view">
+          <div id="products-grid"></div>
+          <p id="products-empty" hidden>No encontré productos con esos datos.</p>
+        </section>
+
+        <section id="view-applicability" class="view">
+          <h2 id="applicability-title"></h2>
+          <ul id="applicability-list"></ul>
+        </section>
+
+        <section id="view-quote" class="view">
+          <div id="quote-qr" aria-label="Código QR de la cotización"></div>
+          <div class="quote-text">
+            <h2>Su cotización está lista</h2>
+            <p>Escanee el código con la cámara de su celular para descargarla.</p>
+            <p>Total</p>
+            <div id="quote-total"></div>
+          </div>
+        </section>
+
+        <aside id="cart">
+          <div class="cart-head">
+            <span>Su cotización</span>
+            <span id="cart-total"></span>
+          </div>
+          <ul id="cart-rows"></ul>
+        </aside>
+      </main>
+    </div>
+
+    <div id="attract">
+      <h1>Hola, soy Norivy</h1>
+      <div class="cta">Toque la pantalla para empezar</div>
+    </div>
+
+    <div id="idle-warning">
+      <div class="idle-box">
+        <h2>¿Sigue ahí?</h2>
+        <button id="btn-continue" type="button">Sí, continuar</button>
+      </div>
+    </div>
+
+    <div id="status-pill" data-state="connecting">Conectando…</div>
+
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
